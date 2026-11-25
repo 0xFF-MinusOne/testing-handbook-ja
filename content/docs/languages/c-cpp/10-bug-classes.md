@@ -1,0 +1,145 @@
+---
+title: "バグの種類"
+slug: bug-classes
+aliases:
+- lang-c-cpp-bug-classes
+weight: 10
+---
+
+# C/C++ のバグの種類
+
+以下は、C/C++ プログラムでよくある脆弱性の種類の一覧です。この一覧は詳細を網羅したものではなく、幅広く、大まかな内容を示すことを意図しています。C/C++ プログラムのセキュリティレビューを始めるときの出発点として使ってください。
+
+{{< checklist >}}
+
+- [ ] バッファオーバーフローとアンダーフロー、空間的安全性
+  - [ ] 1 つずれのミス（off-by-one）
+  - [ ] オブジェクトサイズの不正な計算
+  - [ ] データ移動関数の意味の誤解
+  - [ ] 範囲外の長さを使ったデータの比較
+  - [ ] [オブジェクトではなく生のメモリをコピーしている](https://ctftime.org/writeup/16283)
+  - [ ] [範囲外のイテレータ](https://github.com/MicrosoftDocs/cpp-docs/blob/main/docs/standard-library/checked-iterators.md)
+- [ ] use-after-free、時間的安全性
+  - [ ] use-after-free
+    - 例: 2 つの `shared_ptr` が同じオブジェクトを指していて、一方が参照カウント（refcount）を 0 に減らしてオブジェクトを解放する。参考に、[このブログ記事](https://blog.scrt.ch/2017/01/27/exploiting-a-misused-c-shared-pointer-on-windows-10/)を参照。
+  - [ ] スコープ外の使用、ダングリングポインタ
+    - 例: ヒープ上の構造体が、スタック変数へのポインタを持っている。
+  - [ ] return 後の使用
+    - 例: `return string("").c_str()` では、文字列の内部バッファが return 時に破棄される。
+  - [ ] クローズ後の使用
+    - 例: ファイルのディスクリプタをプロセスメモリに保存し、ファイルを閉じた後、別のファイルが同じディスクリプタに割り当てられる。[この CTF の問題](https://github.com/j00ru/ctf-tasks/tree/master/CONFidence%20CTF%202017/Main%20event/Filesystem)を参照。
+  - [ ] ムーブ後の使用
+  - [ ] 二重解放（double free）
+  - [ ] スマートポインタの誤用。[この CTF の解説記事の例](https://blog.scrt.ch/2017/01/27/exploiting-a-misused-c-shared-pointer-on-windows-10/)を参照。
+  - [ ] ラムダのキャプチャの問題
+  - [ ] 任意のポインタの解放
+    - 例: 攻撃者が、動的に確保されていないメモリへのポインタや、ポインタではないデータに対して `free` を呼べる。
+  - [ ] 不正な参照カウント
+    - 例: 増やすべきでないときに参照カウントが増える、または参照カウントが 0 になってもオブジェクトが解放されない。
+  - [ ] 部分的な解放
+    - 例: 構造体のフィールドは解放されるが構造体は解放されない、またはその逆。
+  - [ ] メモリを確保するライブラリ関数の誤用
+    - 例: OpenSSL の `BN_CTX_start` が、対応する `BN_CTX_end` の呼び出しなしに呼ばれる。参考に、[このブログ記事](https://github.blog/2021-02-25-the-little-bug-that-couldnt-securing-openssl/)を参照。
+- [ ] 整数オーバーフロー、数値のエラー
+  - [ ] 算術オーバーフロー
+    - 計算結果が、途中の型や最終的な型に収まらない。
+  - [ ] 幅のオーバーフロー
+    - データが小さすぎる型に代入される。
+  - [ ] 符号のバグ
+    - 型の符号が変わると、データが予期しない形に変換される。
+  - [ ] 暗黙の型変換
+    - 変数の型が予期せず変わる。
+  - [ ] 負数の代入によるオーバーフロー
+    - `abs(INT_MIN) == INT_MIN == -2147483648`
+    - `int a = -b`（`b = INT_MIN` なら `a = b`）
+  - [ ] 整数の切り詰め
+    - 例: コードが `rax` を読み、`eax` だけを比較し、その後 `rax` を使う。
+  - [ ] 丸め誤差
+  - [ ] 浮動小数点数の不正確さ
+    - 例: イプシロンを使わずに浮動小数点数を直接比較する。
+- [ ] 型の取り違え、型安全性の問題
+  - [ ] キャスト時の型の取り違え
+  - [ ] デシリアライズ時の型の取り違え
+  - [ ] ポインタのデリファレンス時の型の取り違え（ポインタではなくポインタへのポインタ）
+  - [ ] void ポインタ
+  - [ ] 共用体に関する型安全性の問題
+  - [ ] [オブジェクトスライシング](https://pvs-studio.com/en/docs/warnings/v1054/)
+- [ ] 可変長引数関数の誤用
+  - [ ] 書式文字列のバグ
+    - ユーザー入力が書式文字列として使われる。
+  - [ ] 型の不一致のバグ
+    - 書式文字列の指定子が、渡された引数の型と一致しない。
+- [ ] 文字列の問題
+  - [ ] ヌル終端の欠如
+  - [ ] [ロケール依存](https://cppreference.com/w/cpp/locale.html)の文字列操作に関する問題
+    - 実行環境が、コードのロジックに予期しない形で影響を与えうる場合
+  - [ ] エンコーディングと正規化（UTF-8、UTF-16、Unicode など）に関する問題
+  - [ ] バイト数と文字数が等しくない
+    - 例: [マルチバイト文字やワイド文字](https://learn.microsoft.com/en-us/cpp/c-language/multibyte-and-wide-characters?view=msvc-170)を使う場合
+- [ ] 初期化されていないデータの使用
+- [ ] ヌルポインタのデリファレンス
+- [ ] 処理されていないエラー
+  - [ ] 戻り値を確認していない
+  - [ ] 戻り値を誤って比較している
+    - 例: 関数が成功時に 1、失敗時に 0 または負数を返すのに、コードに `if (retval != 0)` のチェックがある場合
+  - [ ] 例外処理の問題
+- [ ] メモリリーク
+  - [ ] 初期化されていないメモリの露出
+    - 例: 構造体のパディングを介したもの
+  - [ ] ポインタの露出
+- [ ] 初期化順序のバグ
+  - 例: [静的初期化順序の問題](https://en.cppreference.com/w/cpp/language/siof.html)
+- [ ] 競合状態
+  - [ ] time-of-check to time-of-use（TOCTOU）
+  - [ ] [ダブルフェッチ](https://j00ru.vexillium.org/slides/2013/syscan.pdf)
+  - [ ] ロックのかけすぎ、またはかけ足りない
+  - [ ] スレッドセーフ・シグナルセーフな API と、そうでない API
+- [ ] ファイルシステムに関する問題
+  - [ ] ソフトリンク・シンボリックリンクの問題
+  - [ ] ディスク同期の問題（データの fsync やフラッシュ）
+  - [ ] 引用符で囲まれていないパス（空白文字を含みうる）の扱いの誤り
+  - [ ] パス区切り文字の欠如（例: `C:\app\files` と `C:\app\files\` と `C:\app\files_sensitive`）
+  - [ ] [大文字小文字の区別と正規化の問題](https://eclecticlight.co/2021/05/08/explainer-unicode-normalization-and-apfs/)
+  - [ ] 予測可能な一時ファイル
+- [ ] イテレータの無効化（参考に、Trail of Bits の[ブログ記事](https://blog.trailofbits.com/2020/10/09/detecting-iterator-invalidation-with-codeql/)を参照）
+  - [ ] リストを反復している最中に、うっかり要素を削除する
+- [ ] 間違いを起こしやすい関数の使用
+  - Intel の [SDL List of Banned Functions](https://github.com/intel/safestringlib/wiki/SDL-List-of-Banned-Functions) を参照
+- [ ] サービス拒否
+  - [ ] リソースの大量使用
+  - [ ] リソース、ファイルディスクリプタ、メモリのリーク
+  - [ ] コンテナ（`vector` など）を参照ではなく値で渡している
+  - [ ] ダングリング参照（`move` の後や `lambda` のキャプチャなど）
+- [ ] 未定義動作
+  - [ ] 不正なアラインメント
+  - [ ] 厳密なエイリアシング規則の違反
+  - [ ] 符号付き整数のオーバーフロー
+  - [ ] 負の整数によるシフト
+  - [ ] 型の幅以上のシフト
+  - [ ] [ゼロ除算](https://lwn.net/Articles/1004146/)
+    - x86 では例外が発生するが、ARM では 0 が返る
+  - [ ] ほかにも数多くある…
+- [ ] コンパイラが持ち込むバグ
+  - [ ] 未定義動作に関する仮定にもとづく、セキュリティチェックの除去
+    - ヌルポインタのデリファレンスが UB であることによる、[ヌルポインタチェック](https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-fdelete-null-pointer-checks)や[配列の境界チェック](https://docs.google.com/presentation/d/1pAosPlKUw4uI5lfg7FVheTZAtI5mUy8iDeE4znprV34/edit?slide=id.g355abfaddab_0_5#slide=id.g355abfaddab_0_5)の除去
+    - 符号付き整数のオーバーフローが UB であることによる、整数オーバーフローのチェックの除去
+  - [ ] データをゼロで埋める関数呼び出しの除去
+  - [ ] 定数時間で動く実装を最適化した結果生じる問題
+  - [ ] 本番ビルドでのデバッグ用アサーションの除去
+- [ ] 演算子の優先順位の問題
+- [ ] 時刻に関する問題
+  - [ ] クロックが単調でないことがある。
+  - [ ] 時刻が戻ることがある（タイムゾーン、[夏時間](https://en.wikipedia.org/wiki/Daylight_saving_time)、[うるう秒](https://cr.yp.to/proto/utctai.html)）。
+- [ ] アクセス制御の問題
+  - [ ] 権限の不正な放棄（`setuid` のバグについては、USENIX Association の[論文](https://www.usenix.org/legacy/events/sec02/full_papers/chen/chen.pdf)を参照）
+  - [ ] 特権的な文脈で信頼できないデータを使う（例: カーネル内で、ユーザーモードのデータを、次の機微な x86 命令とともに使う。[`out`](https://www.felixcloutier.com/x86/out)、[`wrmsr`](https://www.felixcloutier.com/x86/wrmsr)、[`rdmsr`](https://www.felixcloutier.com/x86/rdmsr)、[`xsetbv`](https://www.felixcloutier.com/x86/xsetbv)、コントロールレジスタへの `mov`）
+- [ ] 不正な正規表現（regex）
+  - [ ] ReDoS 攻撃が可能
+  - [ ] 複数行（改行）によるバイパス
+- [ ] エクスプロイト緩和策の欠如
+  - [ ] [コンパイル時の緩和策](https://github.com/ossf/wg-best-practices-os-developers/blob/main/docs/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C%2B%2B.md)
+  - [ ] 実行時の緩和策
+  - [ ] [libc++ のハードニング](https://libcxx.llvm.org/Hardening.html)
+  - [ ] [エクスプロイト緩和策の設定の typo](https://blog.trailofbits.com/2023/04/20/typos-that-omit-security-features-and-how-to-test-for-them/)
+
+{{< /checklist >}}

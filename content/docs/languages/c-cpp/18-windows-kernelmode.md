@@ -1,0 +1,161 @@
+---
+title: "Windows カーネル"
+slug: windows-kernelmode
+aliases:
+- lang-c-cpp-windows-kernelmode
+weight: 18
+---
+
+# Windows カーネル
+
+このリストには、Windows のカーネルドライバーとモジュール向けの基本的なチェックを含めています。
+
+{{< checklist >}}
+
+- [ ] アプリケーションのドライバーに対して CodeQL を実行する。Microsoft は、[Windows ドライバー向けの CodeQL のサポートとセキュリティクエリパック](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/static-tools-and-codeql?tabs=whcp%2Clatest)を公開しています。
+  - ドライバーをソースからビルドできるなら、CodeQL は価値の高い SAST の手法です。
+  - ドライバーをソースからビルド*できない*場合でも、データベースの作成時に CodeQL CLI で `--build-mode=none` を指定して CodeQL を実行できることがありますが、カバレッジと精度は大きく下がります。
+- [ ] ドライバーのバイナリに対して [Driver Verifier](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/driver-verifier) を実行し、問題がないかテストする。
+  - 理想的には、クラッシュが起きた場所の情報を取得できるように、外部から WinDbg をアタッチした VM で行います(たとえば、[仮想 COM ポート経由のデバッグ](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/attaching-to-a-virtual-machine--kernel-mode-))。
+- [ ] [BinSkim](https://github.com/microsoft/binskim) を実行して、ドライバーのバイナリで、緩和策の有効化(オプトイン)などの問題を確認する。
+  - DEP(NX)のサポートを有効にしておく必要があります。
+  - ドライバーが署名のないバイナリを読み込まないように、強制整合性チェック(`IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY`)を有効にしておく必要があります。
+  - [VS2015 より前にビルドされた古いドライバーでは、`INIT` セクションが RWX かつ破棄可能とマークされます](https://blog.poly.nomial.co.uk/2015-09-03-wx-policy-violation-affecting-all-windows-drivers-compiled-in-visual-studio-2013-and-previous.html)。`INIT` セクションは `DriverEntry` が戻ったあとにアンマップされるため、一般には無害ですが、ドライバーが非常に古いツールチェーンでビルドされたことを示す、よい手がかりです(VS2015 で修正されました)。
+- [ ] オブジェクトの属性とセキュリティ記述子を設定する主要なマクロ、[`InitializeObjectAttributes`](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/nf-ntdef-initializeobjectattributes) の使い方を確認する。これは広く関係します。
+  - 作成したオブジェクトにカーネル内からだけアクセスさせたい場合は、`OBJ_KERNEL_HANDLE` が渡されていることを確認します。
+  - セキュリティ記述子が(最後の引数として)渡されている場合は、それが適切かどうかを確認します。
+  - セキュリティ記述子が渡されていない(最後の引数が `NULL`)場合は、既定のセキュリティ記述子でオブジェクトが作成されます。
+    - Windows 8.1 以前では、多くのシステムオブジェクトの名前空間(シンボリックリンクなど)に、既定で継承可能な ACE がないため、システムでローカルセキュリティポリシー「[System objects: Strengthen default permissions of internal system objects (for example, Symbolic Links)](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/system-objects-strengthen-default-permissions-of-internal-system-objects)」を手動で有効にしていない限り、`NULL` のセキュリティ記述子は、オブジェクトが全員にアクセス可能になることを意味します。
+    - Windows 10 以降では、上のローカルセキュリティポリシーが既定で有効になっており、通常のユーザーには読み取り専用、管理者には読み取り・書き込み・変更のアクセスを与える、継承可能な ACE が追加されます。したがって、`NULL` の記述子では、オブジェクトは、通常のユーザーが読み取れ、管理者がすべて操作できるものになります。
+- [ ] カーネル内だけでアクセスできるべきハンドルを作成する場所(たとえば、ドライバー内、またはドライバー間で共有され、ユーザーモードのプロセスからアクセスされないもの)で、オブジェクトの属性の一部として `OBJ_KERNEL_HANDLE` フラグが渡されていることを確認する。この問題が関係するハンドルを作成する、一般的な API の例を次に挙げます。
+  - ファイル: `IoCreateFile`、`ZwCreateFile`、`ZwOpenFile`
+  - レジストリ: `IoOpenDeviceInterfaceRegistryKey`、`IoOpenDeviceRegistryKey`、`ZwCreateKey`、`ZwOpenKey`
+  - スレッド: `PsCreateSystemThread`
+  - イベント: `IoCreateSynchronizationEvent`、`IoCreateNotificationEvent`
+  - シンボリックリンク: `ZwOpenSymbolicLinkObject`
+  - ディレクトリオブジェクト: `ZwCreateDirectoryObject`
+  - セクションオブジェクト: `ZwOpenSection`
+- [ ] [`IoCreateDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocreatedevice) と [`IoCreateDeviceSecure`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdmsec/nf-wdmsec-wdmlibiocreatedevicesecure) に関する一般的な問題がないか調べる。
+  - デバイス名は null にします。通常、ドライバーには名前を付けず、(作成する場合は)シンボリックリンクのほうに名前を付けます。
+  - `DeviceCharacteristics` 引数には、`FILE_DEVICE_SECURE_OPEN` フラグを含めます。
+  - `IoCreateDevice` の代わりに `IoCreateDeviceSecure` を使います。
+  - `IoCreateDeviceSecure` を使っている場合は、`DefaultSDDLString` の SDDL(セキュリティ記述子)文字列が適切かどうかを確認します。
+    - あるいは、デバイスモデルまたはデバイスセットアップクラスに、[INF ファイルまたはセットアップ API を通じて、レジストリに SDDL を設定](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/setting-device-object-properties-in-the-registry)しておきます。
+  - `IoCreateDeviceSecure` を使っている場合は、`DeviceClassGuid` が生成されたもの、またはそのほかの一意なものであり、既存の GUID や共有の GUID でないことを確認します。
+- [ ] [`IoCreateSymbolicLink`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocreatesymboliclink) に関する一般的な問題がないか調べる。
+  - `SymbolicLinkName` 引数から、シンボリックリンクの名前が分かります。[WinObj](https://learn.microsoft.com/en-us/sysinternals/downloads/winobj) では、`\GLOBAL??` オブジェクト名前空間に表示されます。
+  - 名前付きのデバイスへのシンボリックリンクは、必要な場合(たとえば、ユーザーモードのアプリケーションとの相互運用)を除いて、作成すべきではありません。
+  - DACL が適切かどうかを確認します。
+- [ ] `DriverEntry` 関数を見つけ、ドライバーオブジェクトの `MajorFunction` プロパティにどのディスパッチルーチンが設定されているかを確認して、セキュリティへの影響を評価する。ほぼすべてのディスパッチルーチンが、外部からの攻撃対象領域を作るので、どれも評価が重要ですが、特に注目すべき、一般的なディスパッチルーチンを次に挙げます。
+  - `IRP_MJ_READ` と `IRP_MJ_WRITE` は、それぞれ、ドライバーオブジェクトに対する `ReadFile` と `WriteFile` の呼び出しを処理します。
+  - `IRP_MJ_DEVICE_CONTROL` は、ドライバーオブジェクトに対する `DeviceIoControl` の呼び出しを処理します。
+  - [WMI リクエスト](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/handling-wmi-requests)は、`IRP_MJ_SYSTEM_CONTROL` にディスパッチされます。
+- [ ] `IRP_MJ_DEVICE_CONTROL` のディスパッチルーチンがある場合は、各 IOCTL の機能について、セキュリティへの影響を確認する。
+- [ ] 各 IOCTL で、`Access`(`RequiredAccess`)フィールドが適切に設定されていることを確認する(たとえば、ドライバーへの書き込みアクセスを持つ呼び出し元だけに、IOCTL へのアクセスを制限するための `FILE_WRITE_DATA`)。
+  - IOCTL ハンドラーでより厳格なチェックを実装するために、[`IoValidateDeviceIoControlAccess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iovalidatedeviceiocontrolaccess) を使えます。
+- [ ] IRP のディスパッチルーチンで、バッファオーバーランがないか確認する。
+  - `Irp->AssociatedIrp.SystemBuffer` へのアクセスは、`Parameters.DeviceIoControl.InputBufferLength` と `OutputBufferLength` で与えられる長さを守る必要があります。
+- [ ] 出力バッファを使う場所では、`SystemBuffer` がゼロクリアされていることを確認する。
+  - `SystemBuffer` をゼロクリアしないと、カーネルメモリの漏えいと未定義動作につながります。
+  - 詳細は、MSDN の[Failure to Initialize Output Buffers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/failure-to-initialize-output-buffers)を参照してください。
+- [ ] [`MmGetSystemAddressForMdlSafe`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemaddressformdlsafe) の呼び出しを確認し、`NULL` をチェックしていることを確かめる。
+- [ ] オブジェクト(ファイル、レジストリキー、セクション、ミューテックス、セマフォ、イベントなど)へのパスが、信頼できないコンテキスト(ユーザーモードなど)からカーネルに渡される場所では、呼び出し元の権限と特権がチェックされているかを確認する。
+  - チェックされていない場合は、[confused deputy 攻撃](https://en.wikipedia.org/wiki/Confused_deputy_problem)の可能性を探します。
+- [ ] 関数がカーネルモードとユーザーモードの両方の呼び出し元から到達できる場合、呼び出しがユーザーモードからかカーネルモードからかを確認するために、[ExGetPreviousMode](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exgetpreviousmode) が使われているか。
+  - 詳細は、[PreviousMode](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/previousmode) のドキュメントにあります。
+- [ ] イベント、ミューテックス、セマフォ、タイマーの同期オブジェクトが作成または開かれる場所では、それが安全に行われていることを確認する。
+  - オブジェクトに名前が付いている場合(通常は `BaseNamedObjects` に表示されます)は、WinObj で DACL を確認します。null のセキュリティ記述子が渡された場合は、オブジェクトの名前空間の ACE があれば、それを継承します(上の `InitializeObjectAttributes` の情報を参照)。
+  - これらのオブジェクトは、そのプロセスと共有する意図がない限り、ユーザーモードのスレッドのコンテキスト(たとえば IOCTL のディスパッチ内)で作成すべきではありません。
+  - 名前付きの同期オブジェクトを作成する場合は、ユーザーモードから解放されないように、オブジェクトの属性に `OBJ_PERMANENT` が渡されていることを確認します。あとで解放するには、カーネルモードから [`ZwMakeTemporaryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmaketemporaryobject) を呼び出せます。
+  - 永続的でない同期オブジェクトへのハンドルを、ユーザーモードに渡す場合(たとえば IOCTL のレスポンスで)は、ユーザーモードのスレッドがハンドルを閉じてオブジェクトを削除するのを防ぐために、[`ObReferenceObjectByHandle`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle) を使って、オブジェクトの参照カウントを増やす必要があります。参照は、ドライバーのデバイス拡張に保存します。
+- [ ] [`KeWaitForSingleObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kewaitforsingleobject) と [`KeWaitForMultipleObjects`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kewaitformultipleobjects) が、ユーザーモードからアクセスできる、またはユーザーモードと共有している同期オブジェクト(イベント、ミューテックス、セマフォ、タイマー)を待つ場合がないか探す。
+  - これらの関数は、ロックを永続的に、または誤った順序で取得することで、カーネルスレッドをデッドロックさせないか。`Timeout` 引数に `NULL` を渡す呼び出しは、同期オブジェクトが解放されなければ永久にブロックするため、リスクが高いです。
+  - ユーザーモードのプロセスが、同期オブジェクトを取得したまま解放しないことで、重要な機能の実行を妨害できないか。
+  - エラーコードが確認され、適切に処理されているか。
+- [ ] セクションオブジェクト(共有メモリ領域)が作成または開かれる場所では、それが安全に行われていることを確認する。
+  - セクションに名前が付いている場合(通常は `BaseNamedObjects` に表示されます)は、WinObj で DACL を確認します。null が渡された場合は、オブジェクトの名前空間の ACE があれば、それを継承します(上の `InitializeObjectAttributes` の情報を参照)。
+  - ユーザーモードで作成されたセクションオブジェクト(たとえば [`CreateFileMapping`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfilemappinga) による)を、カーネルがマップしてはいけません。セクションは、カーネル内で作成し、マップする必要があります。
+  - セクションオブジェクトを、ユーザーモードから渡されたハンドルを使って開いてはいけません。
+  - カーネルの外からアクセスできてはいけないセクションは、ユーザーモードのスレッドのコンテキスト(たとえば IOCTL のディスパッチルーチン内)でマップすべきではありません。
+  - 名前付きのセクションオブジェクトを作成する場合は、ユーザーモードからアンマップされないように、オブジェクトの属性に `OBJ_PERMANENT` を渡すべきです。あとでアンマップするには、カーネルモードから [`ZwMakeTemporaryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmaketemporaryobject) を呼び出せます。
+- [ ] マップされたセクションオブジェクトにアクセスする場所では、それが安全に行われていることを確認する。
+  - セクション内のデータは、検証し、信頼できないものとして扱う必要があります(特に、ユーザーモードと共有している場合)。
+  - TOCTOU やそのほかの競合状態がないか確認します。セクション内のデータは、いつでも変更されうるからです。理想的には、データをいったんカーネルのメモリにコピーしてから処理します。
+  - DoS を防ぐために、アクセスを try/catch 文で囲みます。
+  - 永続的でないセクションオブジェクトへのハンドルを、ユーザーモードに渡す場合(たとえば IOCTL のレスポンスで)は、ユーザーモードのスレッドがハンドルを閉じてオブジェクトを削除するのを防ぐために、[`ObReferenceObjectByHandle`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle) を使って、オブジェクトの参照カウントを増やす必要があります。参照は、ドライバーのデバイス拡張に保存します。
+- [ ] ユーザーモードからアクセスできるセクションに書き込まれるデータで、カーネルのアドレスが漏えいしていないことを確認する。
+  - カーネルオブジェクトのハンドルは、カーネルのアドレスを不透明な形で包んだものである場合があります。
+- [ ] ハンドルが、ユーザーモードとカーネルモードの間で受け渡されているかを確認する。
+  - ユーザーモードからカーネルモードへのハンドルの受け渡しは非常に危険です。ハンドルは、カーネル側で作成して、ユーザーモードに渡すべきです。
+  - ユーザーモードからカーネルモードへのハンドルの受け渡しは、ハンドルの取り違え(handle confusion)を招くことがあります。誤った型のハンドル(たとえば、ファイルハンドルが期待される場所にミューテックスのハンドル)を渡せないか。
+- [ ] [`ZwSetSecurityObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetsecurityobject) の呼び出しを探す。このような呼び出しは、競合状態の兆候であることがよくあります。
+  - 理想的には、オブジェクトを作成したあとで保護するのではなく、作成時に、`InitializeObjectAttributes` マクロでオブジェクトの属性の一部としてセキュリティ記述子を設定すべきです。
+- [ ] [`MmProbeAndLockPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprobeandlockpages) と [`MmProbeAndLockSelectedPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprobeandlockselectedpages) の呼び出しで取得された領域まわりのメモリアクセスを確認する。これらは通常、[DMA](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-direct-i-o-with-dma) や [PIO](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-direct-i-o-with-pio) の操作のために、ユーザーモードのメモリをカーネル空間にマップするのに使われます。
+  - アクセスの前に、メモリ領域が読み取り可能であることを確認するために、[`ProbeForRead`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-probeforread) が使われていることを確認します。
+  - ユーザーモードからマップされたデータが、適切に検証されていることを確認します。
+  - アクセスが try/catch 文で囲まれていることを確認します。
+  - TOCTOU の問題がないか調べます。
+- [ ] ユーザーモードのメモリに直接アクセスするとき、ページ保護に関する TOCTOU の問題を防ぐために、[`MmSecureVirtualMemory`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-mmsecurevirtualmemory) が使われていることを確認する。また、例外的なケースに備えて、ユーザーモードのメモリへのアクセスが try/catch 文で囲まれていることも確認する。
+- [ ] [`MmIsAddressValid`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-mmisaddressvalid) の呼び出しを探す。メモリアクセスのパターンが十分に堅牢でないことを示している場合があります。
+  - これは古い関数です。一般には、`ProbeForRead` と `__try`/`__except` を使い、適切な場合はさらに `MmSecureVirtualMemory` を使うことが望まれます。
+  - 詳細は、MSDN の[Buffer Handling](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/buffer-handling)を参照してください。
+- [ ] メモリ割り当てでの `POOL_FLAG_NON_PAGED_EXECUTE` の使用を探し、セキュリティへの影響を評価する。カーネル内の RWX メモリは危険だからです。
+- [ ] メモリ割り当ての API の使用を探し、信頼できない入力にもとづくサイズの引数を、検証せずに取っていないことを確認する(`malloc` に任意のサイズを渡すのと同じです)。割り当ての API の一般的な例を次に挙げます。
+  - `ExAllocatePool`、`ExAllocatePoolWithTag`、`ExAllocatePoolWithQuota`、`ExAllocatePoolWithQuotaTag`、`ExAllocatePoolWithTagPriority`、`ExAllocatePool2`、`ExAllocatePool3`
+  - `MmAllocateContiguousMemory`、`MmAllocateContiguousMemoryEx`、`MmAllocateContiguousMemorySpecifyCache`、`MmAllocateContiguousMemorySpecifyCacheNode`、`MmAllocateContiguousNodeMemory`
+  - `MmAllocateNonCachedMemory`
+  - `AllocateCommonBuffer`
+- [ ] プールメモリを割り当てるときに、NX の [`POOL_TYPE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_pool_type)(たとえば `NonPagedPoolNx` や `NonPagedPoolNxCacheAligned`)が使われていることを確認する。
+- [ ] メモリの割り当てと解放が、対応する API で行われていること、また、API の内部でメモリが割り当てられる場合に、適切な解放関数が使われていることを確認する。
+  - たとえば、メモリを `ExAllocatePoolWithTag` で割り当てた場合は、`ExFreePoolWithTag` で解放する必要があります。誤った API で解放すると、カーネルヒープの破壊やバグチェックが起こりえます。正しい解放関数は、各メモリ割り当て API の MSDN ドキュメントで確認してください。
+  - 内部でメモリを割り当てる多くの LSA 関数では、解放に [`LsaFreeMemory`](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-lsafreememory) を使う必要があります。
+- [ ] メモリが使用前にゼロクリアされていること、また、古い割り当て関数が使われていないことを確認する。
+  - `ExAllocatePool`、`ExAllocatePoolWithTag`、`ExAllocatePoolWithQuota`、`ExAllocatePoolWithQuotaTag`、`ExAllocatePoolWithTagPriority` は、[`ExAllocatePool2` と `ExAllocatePool3` に置き換える](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/updating-deprecated-exallocatepool-calls)べきです。これらの新しい関数は、割り当て時に自動でメモリをゼロクリアして、メモリ漏えいの問題を防ぎます。
+  - ほかの割り当て関数で得たメモリは、先にゼロクリアする必要があります。
+- [ ] メモリのゼロクリアに、`RtlZeroMemory` ではなく [`RtlSecureZeroMemory`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlsecurezeromemory) が使われていることを確認する。
+- [ ] [`IoGetRemainingStackSize` と `IoGetStackLimits`](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-the-kernel-stack) の呼び出しを探す。
+  - これらは通常、コードの臭い(カーネルスタックをいじっている、スタック上で動的に割り当てているなど)であり、誤って使うと DoS やそのほかのバグにつながりえます。
+- [ ] [`IoWithinStackLimits`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowithinstacklimits) の呼び出しを探す。
+  - コードがスタックバッファに対して普通でないことをしている可能性を示すことがあり、不正なアクセスにつながるエラーが起こりえます。
+- [ ] ファイルシステムとレジストリの API の使い方に、TOCTOU の問題がないか探す。
+  - `ZwOpenDirectoryObject` や `ZwQueryDirectoryFile` でディレクトリの内容を列挙したあと、ファイルがまだ存在することを確かめるために呼び出しの成功を確認せずに、`ZwOpenFile` や `ZwCreateFile` でファイルを開いている箇所を探します。
+  - `ZwEnumerateKey` でレジストリキーの内容を列挙したあと、キーがまだ存在することを確かめるために呼び出しの成功を確認せずに、`ZwOpenKey` でサブキーを開いている箇所を探します。
+  - 呼び出しの間でファイルの内容が変わっていないことを確認せずに、`ZwReadFile` を使っている箇所を探します。
+- [ ] サービス拒否に悪用されうる、[スピンロック](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/introduction-to-spin-locks)の使い方を探す。
+  - 取得したスピンロックが、例外が起こりうる場合を含め、すべてのコードの流れで解放されることを確認します。
+  - スピンロックを取得している間に、過度な計算や長い遅延が起きないよう、コードが対策していることを確認します。スピンロックを待ってハングしたカーネルスレッドは、多くの CPU 時間を消費し、`THREAD_STUCK_IN_DEVICE_DRIVER` のバグチェックを引き起こすことがあります。
+  - 悪意のあるユーザーモードのプロセスが、意図的にスピンロックの競合を起こせる場合を探します。たとえば、スピンロックを取得する IOCTL を繰り返し呼び出して、システムスレッドを固まらせたり、重要な処理が進まないようにしたりする場合です。
+- [ ] 次のような、注目すべき通知ルーチンを探す。これらは AV/EDR でよく使われます。
+  - `PsSetCreateProcessNotifyRoutine(Ex/Ex2)`
+  - `PsSetCreateThreadNotifyRoutine(Ex)`
+  - `PsSetLoadImageNotifyRoutine(Ex)`
+- [ ] コピー先の文字列の `MaximumLength` が十分に大きいかを確認せずに、`RtlCopyString` や `RtlCopyUnicodeString` を使っている箇所を探す。
+  - これらの関数は、コピー先の文字列の `MaximumLength` フィールドを守るため、バッファオーバーフローにはなりませんが、文字列が黙って切り詰められます。
+- [ ] [`RtlAppendUnicodeToString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlappendunicodetostring) や [`RtlAppendUnicodeStringToString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlappendunicodestringtostring) の結果を確認していない箇所を探す。
+  - コピー先の文字列の裏のバッファが、結果の文字列を格納するのに足りない場合、これらは `STATUS_BUFFER_TOO_SMALL` を返します。戻り値を確認しないと、文字列が期待した値を含まないことがあります。
+- [ ] [`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck) の呼び出しを探す。
+  - これは、ドライバーが、ユーザーが何かにアクセスできるかどうかを独自にチェックしていることを意味するため、常にセキュリティに関係します。
+- [ ] [`SeAssignSecurity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seassignsecurity) と [`SeAssignSecurityEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seassignsecurityex) の呼び出しを探す。
+  - これらはセキュリティ記述子の ACE を変更するため、常にセキュリティに関係します。
+- [ ] [`RtlQueryRegistryValues`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlqueryregistryvalues) の呼び出しを探す。
+  - `REG_EXPAND_SZ` や `REG_MULTI_SZ` の値の型が読み取られる可能性がある場合は、`RTL_QUERY_REGISTRY_NOEXPAND` フラグが渡されていることを確認します。これにより、カーネルモードのコンテキストでの、環境変数の安全でない展開を防げます。
+  - `RTL_QUERY_REGISTRY_DIRECT` フラグを使う場合は、`RTL_QUERY_REGISTRY_TYPECHECK` フラグが渡されていることを確認します。これにより、対象の値の型が期待した型と一致しないとき、API の呼び出しが安全に失敗し、バッファオーバーフローを避けられます。
+- [ ] ドライバーが、電源管理イベント向けに `IRP_MJ_POWER` を実装しているかを確認する。
+  - スリープや復帰のときに、オブジェクトや状態をリセットしたり再作成したりするか。これを悪用できないか。
+  - 低電力状態(スリープやハイバネートなど)から復帰したあとも、外部のシステム情報が変わらないと誤って想定していないか。これを悪用できないか。
+- [ ] コードが、[`KeQuerySystemTime`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerysystemtime-r1)(または `Precise` 版)が単調であると想定していないかを評価する。
+  - システムクロックが変わった場合(たとえば夏時間の境目)に、レート制限などの時間に関するチェックを回避できないか。
+- [ ] ドライバーが WMI プロバイダーとして登録されている場合は、WMI 機能の攻撃対象領域を評価する。
+  - WMI プロバイダーとして動作するドライバーは、[`IoWMIRegistrationControl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiregistrationcontrol) API を呼び出します。詳細は、[MSDN の Registering as a WMI Data Provider](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/registering-as-a-wmi-data-provider)を参照してください。
+  - 攻撃対象領域の大半は、[WMI のマイナー IRP](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/wmi-minor-irps)を処理するコードから生じます。ただし、KMDF のドライバーは[別のコールバック API](https://learn.microsoft.com/en-us/windows-hardware/drivers/wdf/introduction-to-wmi-for-kmdf-drivers)を使います。
+  - 機密情報が WMI のデータで公開されていないことを確認します。
+- [ ] イベントトレーシング(ETW)の使い方を評価する。
+  - イベントプロバイダーの登録は、[`EtwRegister`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwregister) の呼び出し箇所を探すことで見つけられます。イベントの書き込みは、[`EtwWrite`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwwrite)、[`EtwWriteEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwwriteex)、[`EtwWriteString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwwritestring)、[`EtwWriteTransfer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwwritetransfer) の呼び出し箇所を探すことで見つけられます。
+  - 機密情報が ETW のメッセージで公開されていないことを確認します。
+  - チャネルが、適切なアクセス制御と隔離で構成されていることを確認します。これは通常、ビルド時に、ドライバーの計装マニフェストにある [`ChannelType`](https://learn.microsoft.com/en-us/windows/win32/wes/eventmanifestschema-channeltype-complextype) 定義の `isolation` プロパティで設定します。詳細は、[MSDN の Adding Event Tracing to Kernel-Mode Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/adding-event-tracing-to-kernel-mode-drivers)を参照してください。
+    - ユーザーモードのアプリケーションも、[`EvtSetChannelConfigProperty`](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtsetchannelconfigproperty) API を使って、[`EvtChannelConfigIsolation`](https://learn.microsoft.com/en-us/windows/win32/api/winevt/ne-winevt-evt_channel_config_property_id) プロパティに、[`EVT_CHANNEL_ISOLATION_TYPE`](https://learn.microsoft.com/en-us/windows/win32/api/winevt/ne-winevt-evt_channel_isolation_type) 列挙型の値を設定できます。
+  - プロバイダーの GUID とイベントを消費するアプリケーションの見つけ方は、[ETW の内部に関する私たちのブログ記事](https://blog.trailofbits.com/2023/11/22/etw-internals-for-security-research-and-forensics/)を読んでください。
+  - [Geoff Chappell の ETW Security のページ](https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/etw/secure/index.htm?tx=32,35)には、ETW で使われる保護可能なオブジェクトについて、さらに有用な情報があります。
+- [ ] ドライバーが PCIe デバイス(Thunderbolt、USB4、M.2、U.2、U.3 を含む)向けである場合は、ドライバーが [DMA リマッピングにオプトインしている](https://learn.microsoft.com/en-us/windows-hardware/drivers/pci/enabling-dma-remapping-for-device-drivers)ことを確認する。
+
+{{< /checklist >}}

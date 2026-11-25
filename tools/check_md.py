@@ -56,8 +56,10 @@ def check(tr, orig):
         for i, (x, y) in enumerate(zip(A['blocks'], B['blocks'])):
             if x != y: out.append(f'     {i + 1} 番目: 原文 {x[:60]!r} / 訳 {y[:60]!r}'); break
     if A['sc'] != B['sc']: out += [f"  [ショートコード] 原文 {A['sc']}", f"                   訳   {B['sc']}"]
-    for k, lab in (('inline', 'インラインコード'), ('urls', 'URL'), ('links', 'リンク先'), ('imgs', '画像'), ('ids', '見出しID')):
+    for k, lab in (('inline', 'インラインコード'), ('urls', 'URL'), ('links', 'リンク先'), ('imgs', '画像')):
         out += cdiff(A[k], B[k], lab)
+    # 見出しの ID: 原文にあるものは必ず残す。訳で足すのは可(英語の見出しの自動 ID を、日本語の見出しに引き継ぐため)
+    for k in (collections.Counter(A['ids']) - collections.Counter(B['ids'])): out.append(f'  [見出しID] 訳に無い: {k!r}')
     if A['tags'] != B['tags']: out.append(f"  [HTML タグ] 原文 {dict(A['tags'])} / 訳 {dict(B['tags'])}")
     if A['heads'] != B['heads']: out.append(f"  [見出し] 原文 {dict(A['heads'])} / 訳 {dict(B['heads'])}")
     if A['rows'] != B['rows']: out.append(f"  [表の行] 原文 {A['rows']} / 訳 {B['rows']}")

@@ -1,0 +1,153 @@
+---
+title: "Windows ユーザーモード"
+slug: windows-usermode
+aliases:
+- lang-c-cpp-windows-usermode
+weight: 16
+---
+
+# Windows ユーザーモード
+
+このリストは、C/C++ の標準ライブラリを Windows 環境で使うときの、一般的な確認項目と、やりがちな失敗（footgun）をまとめたものです。
+
+{{< checklist >}}
+
+- [ ] [binskim](https://github.com/microsoft/binskim) を実行して、アプリケーションのバイナリで、緩和策の有効化（オプトイン）などの問題を確認する。
+  - DEP（NX）、ASLR（x86\_64 では HiASLR も）、Control Flow Guard（CFG）、SafeSEH（x86\_32 のみ）は常に有効にし、実行ファイルには署名する。
+  - さらに安全性を高めるために、シャドウスタック（CET）と Spectre の緩和策を有効にしてもよい。
+  - 本番リリースに PDB ファイルとデバッグ情報を含めない。
+- [ ] インストール処理が、ファイルの展開時に競合状態を持たないことを確認する（たとえば、展開中に一時ファイルを上書きでき、その一時ファイルが保護された、または特権のあるパスにコピーされる場合など）。
+  - これを悪用して、重要なシステムファイルへのシンボリックリンクを追加し、インストーラーにそのファイルを上書きさせて、恒久的な DoS を起こせないか。
+  - [MSI のロールバックの動作を悪用して、ファイル削除を権限昇格につなげられないか](https://cloud.google.com/blog/topics/threat-intelligence/arbitrary-file-deletion-vulnerabilities/)。[ZDI のこの記事](https://www.zerodayinitiative.com/blog/2022/3/16/abusing-arbitrary-file-deletes-to-escalate-privilege-and-other-great-tricks)も参照。
+- [ ] 実行時の DLL の読み込み失敗を確認する。
+  - [procmon](https://learn.microsoft.com/en-us/sysinternals/downloads/procmon) でプロセスの起動を監視し、存在しない DLL へのファイルアクセスの試みを探す。ローカライズ用などの DLL が、そのプラットフォームに存在しないために読み込みに失敗するのはよくあることで、同じ名前の DLL を作業ディレクトリに置くことで悪用できる場合がある。
+  - この目的で procmon を設定するためのガイドは、[この MSDN の記事](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-security)の末尾を参照。
+  - DLL の読み込み失敗の例として、[Node.js 固有の例](https://www.atredis.com/blog/2025/3/7/node-is-a-loader)と [Electron 固有の例](https://hexiosec.com/blog/dll-hijacking-and-proxying/)も参照。
+- [ ] DLL プランティングに対して脆弱かもしれない [`LoadLibrary`](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibrarya) の呼び出しを確認する。
+  - 安全なパスから読み込んでいるか。
+  - DLL プランティング攻撃を防ぐため、バイナリへのフルパスを指定する。
+    - パスの生成に、信頼できるデータが使われていることを確かめる。カレントワーキングディレクトリは、攻撃者が制御できるかもしれない。読み込みパスをレジストリや設定ファイルから取得している場合、それらに適切な ACL が設定されているか。
+  - 安全性を高めるために、[`LoadLibraryEx`](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexa) を使える。
+    - 検索フラグで読み込み場所を制限できる（たとえば、`LOAD_LIBRARY_SEARCH_SYSTEM32` で System32 からだけ読み込む）。
+    - `LOAD_LIBRARY_REQUIRE_SIGNED_TARGET` を指定して、対象が署名されていること（たとえば [Authenticode 署名](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/authenticode)）を必須にできる。
+- [ ] 引用符で囲まれていないパスのために、実行ファイルのプランティングに対して脆弱かもしれない [`CreateProcess`](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessa) の呼び出しを確認する。
+  - `lpApplicationName` が `NULL` の場合、`lpCommandLine` は、空白で区切られたコマンドと引数として使われる。実行ファイルのパスに空白があり、引用符で囲まれていないと、Windows はそのパスの断片を先に実行しようとする（たとえば、`C:\Program Files\Application\test.exe` は、先に `C:\Program.exe` を実行しようとする）。これは、パス全体を引用符で囲むと緩和できる。
+    - これはサブディレクトリ内の空白にも当てはまることに注意。`C:\Users\user\AppData\Local\App\Some Dir\update.exe` が引用符で囲まれていないと、Windows は先に `C:\Users\user\AppData\Local\App\Some.exe` を実行しようとする。
+  - 対象が `.cmd` または `.bat` ファイルの場合、古いシステムでは、プログラムと同じディレクトリに悪意のある `cmd.exe` を置ける可能性がある。[MS14-019](https://msrc.microsoft.com/blog/2014/04/ms14-019-fixing-a-binary-hijacking-via-cmd-or-bat-file/) を参照。
+    - この脆弱性が実際に関係するのは、ユーザーが、パッチの当たっていない古い WinXP や Server 2003 のシステム（産業用、医療用、実験用の機器など）でアプリケーションを動かす可能性が見込まれる場合だけ。
+- [ ] 高権限のプロセスが、より低い権限のプロセスや別のユーザーとして動くプロセスを作る場合、そのプロセスがハンドルの継承を無効にしていることを確認する。
+  - `CreateProcess(AsUser)` では、`bInheritHandles` パラメータがこれを制御する。
+  - 高権限のプロセスが持つ機密性の高いハンドルが、低権限のプロセスに引き継がれるおそれがある。
+- [ ] 高権限のプロセスが、より低い権限のプロセスや別のユーザーとして動くプロセスを作る場合、そのプロセスが `DETACHED_PROCESS` または `CREATE_NEW_CONSOLE` を渡していることを確認する。
+  - 渡していない場合、低権限のプロセスは、高権限のプロセスのコンソールオブジェクトへのアクセスを共有する。つまり、`stdin`、`stdout`、`stderr` を両方のプロセスが操作できる。これは、コンソールアプリケーションや、`stdin`/`stdout` を通じてデータを扱うプログラムで問題になりうる。
+- [ ] [`CREATE_PRESERVE_CODE_AUTHZ_LEVEL`](https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags) フラグが `CreateProcess` に渡されていないかを確認する。渡すと、Windows Vista とパッチの当たっていない Windows 7 では、[AppLocker と SRP を回避](https://skanthak.hier-im-netz.de/appcert.html)できてしまう。
+- [ ] `CREATE_BREAKAWAY_FROM_JOB` フラグ付きの `CreateProcess` の呼び出しを、サンドボックス脱出の可能性という観点で調べる。[ジョブオブジェクト](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)をサンドボックスに使っている場合（たとえば、[UI の制限](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_ui_restrictions)や[セキュリティ上の制限](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_security_limit_information)）、`CreateProcess` に `CREATE_BREAKAWAY_FROM_JOB` フラグを渡すときは注意が必要。ジョブ内のプロセスがこのフラグ付きで新しいプロセスを作ると、新しいプロセスはジョブの外に作られ、ジョブの制限や存続期間の対象ではなくなる。つまり、実質的にサンドボックスから「脱出」する。
+  - パス、引数、作業ディレクトリ、環境変数を制御して、別のものを実行させたり、そのほかの想定外の動作を起こしたりできないか。
+  - 起動された実行ファイルを、DLL プランティングや似た手口で悪用できないか。
+  - 起動されたプロセスは、どのファイル、レジストリキー、そのほかのリソースに触れるか。
+  - 新しいプロセスは、ジョブ内のサンドボックス化されたプロセスと通信するか。通信する場合、その機能のバグを悪用して、サンドボックスから脱出できないか。
+- [ ] プロセスを[ジョブオブジェクト](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)で管理している場合、[ジョブのセキュリティ記述子](https://learn.microsoft.com/en-us/windows/win32/procthread/job-object-security-and-access-rights)が適切であることを確認する。
+- [ ] `LoadLibrary`、`CreateProcess`、`CreateProcessAsUser`、[`ShellExecute`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecutea)、[`ShellExecuteEx`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexa)、[`SHCreateProcessAsUser`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shcreateprocessasuserw) などの関数への引数が、ユーザーの入力に左右されうるかを評価する。
+  - たとえば、これらの関数がフルパスではない引数で呼ばれると、攻撃者が CWD に実行ファイルを置けるかもしれない。脆弱性の例として、[CVE-2020-27955](https://legalhackers.com/advisories/Git-LFS-RCE-Exploit-CVE-2020-27955.html) を参照。
+- [ ] `LoadLibrary`、`CreateProcess`、`ShellExecute` などの関数を呼ぶ前に、手動の署名検査や完全性検査を行っている場合、それらの検査が TOCTOU の問題に耐えられるかを評価する。
+  - DLL に対する手動の署名検査は避け、代わりに `LOAD_LIBRARY_REQUIRE_SIGNED_TARGET` 付きの `LoadLibraryEx` を使う。
+- [ ] コードベースに、パストラバーサルやパスの混同の問題がないかを確認する。
+  - 比較する前に、パスを正規化しているか。
+    - 与えられたパス文字列の正規のパスを求めるには、[`PathCchCanonicalizeEx`](https://learn.microsoft.com/en-us/windows/win32/api/pathcch/nf-pathcch-pathcchcanonicalizeex) を使う。
+  - 文字列を UTF-16 で扱い、大文字小文字を区別しない序数比較を使っているか。
+    - UTF-16 のパスについて、大文字小文字を区別しない序数比較（文字の比較ではなく、バイトの比較）が必要。
+    - ANSI のパス文字列を取る、`-A` が付いた API（`CreateFileA` など）を使っていないか。Windows は名前に対して文字のフィッティングを行おうとするが、基本的な ANSI の範囲外の UTF-16 文字を扱うと、[文字化け](https://en.wikipedia.org/wiki/Mojibake)になることがあり、検査を回避できる可能性がある。
+    - パス文字列を ANSI/ASCII や UTF-8 だと誤って想定していないか。Unicode のパスでこれを悪用できないか。（たとえば、㍜ は UTF-16 のコードポイント 0x335C で、ASCII として解釈すると、感嘆符とそれに続くバックスラッシュになる）。
+    - [WorstFit](https://devco.re/blog/2025/01/09/worstfit-unveiling-hidden-transformers-in-windows-ansi/) 型の脆弱性を探す。
+  - パスの正規化が不適切ではないか。
+    - LPT や COM のような予約済みのパスを使うと、どうなるか。これがどのように脆弱になりうるかは、[CVE-2025-27210 の修正](https://github.com/nodejs/node/pull/59286)を参照。
+    - 正規表現でそれらをブロックしている場合、[この issue](https://github.com/nodejs/node/pull/59261) のように、上付き数字で回避できないか。
+  - 予約済みの DOS デバイス名を悪用して、ファイルの作成を妨害できないか。
+    - 予約済みの DOS デバイス名を持つファイルは、通常、作成もアクセスもできない。
+      `CON`, `PRN`, `AUX`, `NUL`, `COM1`, `COM2`, `COM3`, `COM4`, `COM5`, `COM6`, `COM7`, `COM8`, `COM9`, `COM¹`, `COM²`, `COM³`, `LPT1`, `LPT2`, `LPT3`, `LPT4`, `LPT5`, `LPT6`, `LPT7`, `LPT8`, `LPT9`, `LPT¹`, `LPT²`、`LPT³` （上付きの数字は ISO/IEC 8859-1 コードページの文字）。
+    - これらの名前は、拡張子が続いていても、通常は予約されたまま（たとえば、`c:\users\test\COM3.log` も予約されている）。
+    - Windows での[ファイル名の付け方](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)の詳細を参照。
+  - シンボリックリンクやジャンクションで、パストラバーサルの検査を回避できないか。
+    - シンボリックリンクやジャンクションの指す先を検査しているか。その検査は TOCTOU の問題に対して脆弱ではないか。
+    - さらに読むなら、[シンボリックリンクのエクスプロイトに関する記事](https://nixhacker.com/understanding-and-exploiting-symbolic-link-in-windows/)を参照。
+    - シンボリックリンクのテストに使えるツールは、[symboliclink-testing-tools](https://github.com/googleprojectzero/symboliclink-testing-tools) のスイートを参照。
+  - [特殊なパス形式](https://github.com/rust-lang/cargo/issues/9770#issuecomment-993069234)に対して防御しているか。
+    - UNC パスに対して防御しているか。
+      - 例: `\\server_or_ip\path\to\file.abc`
+      - 例: `\\?\server_or_ip\path\to\file.abc`
+      - 対象のリソースがリモートのリソース（UNC/SMB、FTP など）かどうかの確認には、[`PathIsNetworkPath`](https://learn.microsoft.com/en-gb/windows/win32/api/shlwapi/nf-shlwapi-pathisnetworkpathw) を使う。
+    - NT ファイルパスに対して防御しているか。
+      - 例: `\\.\GLOBALROOT\Device\HarddiskVolume1\` は `C:\` と同じ。
+    - [8.3 形式のファイル名](https://blog.0daylabs.com/2016/09/06/using-windows-shortfilename-feature-lfi/)（短いファイル名 \[SFN\]）に対して防御しているか。
+      - 例: `TextFile.Mine.txt` → `TEXTFI~1.TXT`
+  - `CreateFile` で `FILE_FLAG_POSIX_SEMANTICS` フラグを使うと、名前が同じで大文字小文字の区別が異なる複数のファイルを作れる。これは、パスの処理を攻撃するのに使える有用なガジェットになりうる。
+    - `FILE_ATTRIBUTE_DIRECTORY` を渡せば `CreateFile` でディレクトリを作れるが、POSIX セマンティクスのフラグでは、それらは大文字小文字を区別するようにならない。
+- [ ] 名前付きパイプが使われているかを確認する。[`CreateNamedPipe`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createnamedpipea) と [`CallNamedPipe`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-callnamedpipea) の呼び出し、または `\\.\pipe\` で始まるパスを持つ `CreateFile` の呼び出しを探す。
+  - パイプを作るとき、`lpSecurityAttributes` に適切なセキュリティ記述子が設定されているか。
+  - パイプに複数の接続を同時に張れるか。
+    - 張れる場合、接続間で状態が適切に分離されているか。
+    - 張れない場合、悪意のあるプロセスが先に接続することで、機能を使えなくできないか。
+  - パイプを通じて渡されるデータは、適切に検証・無害化されているか。
+  - ネットワーク越しの名前付きパイプはかなりまれなので、ほとんどの場合、パイプの作成時に、`dwPipeMode` 引数に `PIPE_REJECT_REMOTE_CLIENTS` フラグを指定する。
+  - 名前付きパイプは、[PipeList](https://learn.microsoft.com/en-us/sysinternals/downloads/pipelist) で列挙できる。
+- [ ] 使う前にメモリを初期化していない箇所がないかを確認する。
+  - [`GlobalAlloc`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalalloc) は、ゼロクリアしない（`GMEM_ZEROINIT` フラグを渡した場合を除く）。
+  - [`LocalAlloc`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-localalloc) は、ゼロクリアしない（`LMEM_ZEROINIT` フラグを渡した場合を除く）。
+  - [`HeapAlloc`](https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapalloc) は、ゼロクリアしない（`HEAP_ZERO_MEMORY` フラグを渡した場合を除く）。
+  - [`HeapReAlloc`](https://learn.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heaprealloc) は、ゼロクリアしない（`HEAP_ZERO_MEMORY` フラグを渡した場合を除く）。
+  - [`VirtualAlloc`](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc) は、ゼロクリア*する*。ただし、`MEM_RESET` と `MEM_RESET_UNDO` フラグを使う一部の場合を除く。詳しくはドキュメントを参照。
+- [ ] メモリリークを確認する。
+  - メモリは、適切な解放関数（`GlobalFree`、`LocalFree`、`HeapFree`、`VirtualFree` など）で解放する。
+  - 内容をユーザーが制御できる場合、ヒープスプレーのリスクがある。
+  - 機密データがプロセスのメモリに残り続けるおそれがある。
+  - Windows の SSPI API では、資格情報に関連するメモリの解放に、どの API を使うべきかを確認する。たとえば、[`SspiEncodeAuthIdentityAsStrings`](https://learn.microsoft.com/en-us/windows/win32/api/sspi/nf-sspi-sspiencodeauthidentityasstrings) では、[`SspiLocalFree`](https://learn.microsoft.com/en-us/windows/win32/api/sspi/nf-sspi-sspilocalfree)（`LocalFree` の単なるラッパー）ではなく、[`SspiFreeAuthIdentity`](https://learn.microsoft.com/en-us/windows/win32/api/sspi/nf-sspi-sspifreeauthidentity)（解放の前に、内部のメモリをゼロクリアする）を使う必要がある。Windows SDK のサンプルは、数か所で誤って `SspiLocalFree` を使っていて、MSDN のドキュメントの記述に従わず、サンプルをそのままコピーしてしまうことがある。
+- [ ] プロセス内の機密情報が保護されているかを確認する。
+  - 機密情報のゼロクリアに、`memset` や [`ZeroMemory`](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/aa366920\(v=vs.85\)) を使うのは不適切。コンパイラに最適化で取り除かれないよう、代わりに `memset_s` や `RtlSecureZeroMemory` を使う。
+  - メモリ内の機密データの暗号化には、Data Protection API（DPAPI）を使う（[`CryptProtectMemory`](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectmemory) などの関数を通じて）。
+- [ ] 次の関数の使用を探す: [`VirtualAllocEx`](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualallocex), [`VirtualProtectEx`](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualprotectex), [`CreateRemoteThread`](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createremotethread), [`ReadProcessMemory`](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-readprocessmemory), and [`WriteProcessMemory`](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-writeprocessmemory)
+  - これらは、ほかのプロセスに干渉するために使われる（たとえば、リモートでの DLL インジェクション）。
+  - どのプロセスにインジェクションしているか。どんな変更を加えているか。その機能によって、攻撃対象領域が増えていないかを評価する。
+  - 書き込み先のアドレスを制御できるか。別のプロセスへの write-what-where は、実行可能なメモリの上書き、またはポインタの上書きによる、コード実行のための強力なプリミティブである。
+  - インジェクションが固定アドレスを使っているか（つまり、`VirtualAllocEx` に特定のアドレスを渡しているか）を確認する。
+    - 固定の対象アドレスがすでに使われていないという保証がないため、ASLR が有効なプロセスでは、クラッシュやメモリ破壊につながりうる。
+    - そのアドレス範囲を先に確保することで、自分が制御するプロセスへのインジェクションを阻止できないか。これは、特にセキュリティソフトウェアに関係する。
+  - 機密データが別のプロセスに書き込まれていないか。書き込まれている場合、それを悪用できないか。
+    - 資格情報、鍵、そのほかの機密データが、低権限のプロセスに書き込まれていないか。
+    - アドレスやハンドルのリークは、メモリ破壊の問題を突くためのリークのプリミティブとして役立つかもしれない。
+  - 別のプロセスにメモリを書き込んでいる場合、コピー元のバッファは適切に初期化されているか。初期化されていなければ、プロセス間のメモリ開示になる。そのメモリに、プロセス間の書き込みを行っているプロセスの機密情報が含まれている可能性はないか。
+  - インジェクションを繰り返し実行させられないか。
+    - 可能なら、OOM による DoS 状態になりうる。
+    - データが予測可能なら、ASLR のあるプロセスを攻略するための、ヒープスプレーのガジェットになりうる。
+    - ページが実行可能なら、ASLR のあるプロセスを攻略するときに、[ROP](https://en.wikipedia.org/wiki/Return-oriented_programming) スプレーのガジェットとして悪用できるかもしれない。
+  - `ReadProcessMemory` で別のプロセスのメモリを読む場合、それは適切に検証されているか。対象となる悪意のあるプロセスが、データ解析ロジックのバグを引き起こせないか。
+- [ ] [`AdjustTokenPrivileges`](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-adjusttokenprivileges) の呼び出しを探す。ほぼ必ずセキュリティに関係するため。
+  - `SeBackupPrivilege` が有効だと、トークンは、権限の検査なしで、ファイルシステムへの完全なアクセスを得られる。
+  - `SeTcbPrivilege` が有効だと、トークンは、追加の検査なしで、ほかのユーザーのログイントークンを作れる。
+  - `SeAssignPrimaryTokenPrivilege` が有効だと、トークンは、プロセスのプライマリセキュリティトークンを置き換えられる。
+  - `SeDebugPrivilege` が有効だと、トークンは、システム上のすべての任意アクセス制御リスト（DACL）とシステムアクセス制御リスト（SACL）を回避でき、実質的にシステム全体に対する全権を得る。
+  - 詳しくは、MSDN の [Enabling and Disabling Privileges in C++](https://learn.microsoft.com/en-us/windows/win32/secauthz/enabling-and-disabling-privileges-in-c--) を参照。
+- [ ] サービスが最小限の権限で動いていることを、権限を調べて確認する（たとえば、`SYSTEM` ではなく `LOCAL SERVICE` や `NETWORK SERVICE` を使う）。
+  - [icacls](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls) は、ACL を表示するのに便利なツール。
+- [ ] サービスのバイナリについて、バイナリとパスに適切な DACL と SACL が設定されていることを確認する。
+  - DACL は、一般ユーザーがその場所にファイルを書き込めないようにする。
+    - サービスのバイナリは書き込めなくても、ディレクトリが書き込める場合は、DLL プランティング攻撃が使える。
+  - SACL は、低い完全性ラベルのものが何にも触れないようにする。
+- [ ] サービスのレジストリエントリに、適切な DACL が設定されていることを確認する。
+  - サービスの登録に SCM の API を使えば自動的に行われるが、アプリケーションによっては、レジストリ API を通じて、サービスのエントリを手動で追加している。
+- [ ] アプリケーションがセキュリティ製品の場合、自身を[保護されたプロセス](https://learn.microsoft.com/en-us/windows/win32/services/protecting-anti-malware-services-)として登録していることを確認する。
+  - 改ざんが懸念される場合は、サービスのプロセスを保護対象にすることを推奨する。
+  - 保護されたプロセスをデバッグするには、WinDbg をカーネルデバッガとして使う必要がある。
+  - 保護されたプロセスが、更新などの機密性の高い操作を行う、保護されていない子プロセスを起動していないか。
+  - 保護されたプロセスに、署名されていない任意のコードを実行する仕組み（JS やそのほかのスクリプトなど）がないか。そうした能力を持つ DLL を読み込んでいないか。保護されたプロセスに関連する署名・完全性の要件を回避してしまうため、これは強く避けるべき。
+- [ ] アプリケーションが、[Windows の証明書ストア](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/certificate-stores)に証明書をインストールするかを確認する。インストールする場合は、用途が適切に制限されているか、証明書のインストール処理中に、保存されている証明書を変更できないかを確認する。
+  - 証明書ストアを見るには、スタート → ファイル名を指定して実行 → `certmgr.msc` を開く。
+- [ ] 非推奨の暗号 API の使用を探す。
+  - Crypt で始まる暗号サービスプロバイダ（CSP）の API（`CryptGenRandom`、`CryptAcquireContext` など）は非推奨。代わりに、[Cryptography API: Next Generation（CNG）の API](https://learn.microsoft.com/en-us/windows/win32/seccng/cng-portal) を使う。
+- [ ] 安全でない暗号プリミティブの使用を探す。
+  - 古い CSP の API を使っている場合は、[`CryptCreateHash`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-cryptcreatehash) や [`CryptGenKey`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-cryptgenkey) などの関数にある [`ALG_ID`](https://learn.microsoft.com/en-us/windows/win32/seccrypto/alg-id) の値を確認する。
+  - 新しい CNG の API を使っている場合は、次の手順を行う。
+    - [`BCryptOpenAlgorithmProvider`](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptopenalgorithmprovider) の呼び出しを確認する。[CNG のアルゴリズム識別子](https://learn.microsoft.com/en-us/windows/win32/seccng/cng-algorithm-identifiers)は文字列として渡される。
+    - ほかのほとんどの CNG の API では、アルゴリズムの指定に使われる [CNG アルゴリズムの疑似ハンドル](https://learn.microsoft.com/en-us/windows/win32/seccng/cng-algorithm-pseudo-handles)を確認する。
+- [ ] サイズ 1 の `fwrite` によるヒープリークの脆弱性がないかを、コードベースで確認する。詳しくは、[この X の投稿](https://x.com/gamozolabs/status/1207088312273362945)を参照。
+
+{{< /checklist >}}
