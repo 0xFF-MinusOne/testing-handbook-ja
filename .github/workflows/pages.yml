@@ -20,7 +20,7 @@ jobs:
     env:
       HUGO_VERSION: 0.133.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive   # themes/book(hugo-book)を取る
       - uses: peaceiris/actions-hugo@v3

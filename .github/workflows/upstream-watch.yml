@@ -13,7 +13,7 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: 原文と比べて、変わっていたら Issue にする
         env:
           GH_TOKEN: ${{ github.token }}
