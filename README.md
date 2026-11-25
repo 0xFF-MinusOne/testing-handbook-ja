@@ -27,7 +27,7 @@ Trail of Bits の「Testing Handbook」を日本語に訳したものです。�
 - `config.toml` — 上流の設定(そのまま残す)。`config.ja.toml` — 日本語訳用の上書き
 - `themes/book/` — Hugo の book テーマ(git submodule)
 - `layouts/` — 上流のレイアウトと、訳注・フッターの差し込み(`layouts/partials/docs/inject/`)
-- `theme/` — [ja-docs-base](https://github.com/0xFF-MinusOne/ja-docs-base) の部品(用語集の吹き出しなど)と、book 向けの補い。ビルド時に `tools/copy_theme.py` が `static/ja-docs/` にコピーする
+- `theme/` — [ja-docs-base](https://github.com/hina-kura49/ja-docs-base) の部品(用語集の吹き出しなど)と、book 向けの補い。ビルド時に `tools/copy_theme.py` が `static/ja-docs/` にコピーする
 - `GLOSSARY.md` — 訳語集。`TRANSLATION_BRIEF.md` — 翻訳の方針
 
 ## ビルド
