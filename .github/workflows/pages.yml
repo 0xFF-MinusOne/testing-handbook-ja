@@ -29,7 +29,7 @@ jobs:
           extended: true          # book テーマの SCSS に拡張版が要る
       - run: python3 tools/copy_theme.py
       - run: hugo --config config.toml,config.ja.toml --minify
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: public
 
