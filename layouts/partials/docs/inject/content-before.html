@@ -1,0 +1,8 @@
+{{- with .Site.Params.JaRepo -}}
+{{- $title := $.Title -}}
+{{- $body := printf "## どのページの、どこ\n\n%s\n\n## 今の訳\n\n\n## 直す案\n\n\n## 理由（原文の該当箇所など）\n\n" $.Permalink -}}
+<aside class="ja-notice" role="note">
+  <p><strong>これは日本語訳です。原文が正です。</strong>非公式の翻訳で、原著者（Trail of Bits）とは関係がありません。食い違う場合は<a href="{{ $.Site.Params.UpstreamSite }}" target="_blank" rel="noopener">原文</a>を優先してください。</p>
+  <a class="report" rel="noopener" href="{{ . }}/issues/new?template=mistranslation.md&title={{ printf "誤訳: %s" $title | urlquery }}&body={{ $body | urlquery }}">誤訳を報告</a>
+</aside>
+{{- end -}}

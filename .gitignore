@@ -1,0 +1,16 @@
+public/
+exampleSite/public/
+.DS_Store
+node_modules/*
+.idea/
+
+.hugo_build.lock
+resources/
+
+.direnv/
+materials/fuzzing/aflpp/out
+
+target/
+
+# 生成物(tools/copy_theme.py が theme/ からコピーする)
+static/ja-docs/

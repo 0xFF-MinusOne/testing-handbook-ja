@@ -1,0 +1,14 @@
+# 日本語訳サイト用の設定。上流の config.toml の上に重ねて使う:
+#   hugo --config config.toml,config.ja.toml
+baseURL = "https://0xff-minusone.github.io/testing-handbook-ja/"
+languageCode = "ja"
+title = "Testing Handbook(日本語訳)"
+
+[params]
+  # 「このページを編集」のリンク先を、この日本語訳のリポジトリにする
+  BookRepo = "https://github.com/0xFF-MinusOne/testing-handbook-ja"
+  BookEditBranch = "main"
+  # 誤訳の報告先・原著の表示(layouts/partials/docs/inject/ から使う)
+  JaRepo = "https://github.com/0xFF-MinusOne/testing-handbook-ja"
+  UpstreamRepo = "https://github.com/trailofbits/testing-handbook"
+  UpstreamSite = "https://appsec.guide"

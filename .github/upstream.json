@@ -1,0 +1,14 @@
+{
+  "upstreams": [
+    {
+      "repo": "trailofbits/testing-handbook",
+      "branch": "main",
+      "paths": [
+        "content/*.md",
+        "static/",
+        "layouts/"
+      ],
+      "base": "768209e84e800c10ce5884e82b69e02a4e3a0aa9"
+    }
+  ]
+}
